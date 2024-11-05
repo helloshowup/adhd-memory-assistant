@@ -135,22 +135,23 @@ class EnhancedMemoryManager:
                     }
                     anchor_patterns[anchor_type].append(pattern_data)
 
-            # Format metadata for ChromaDB
-            memory_chain = [
+            # Create memory chain and convert to JSON string
+            memory_chain_data = [
                 {
                     'trigger': str(trigger),
                     'activated_memories': [str(mem) for mem in memories],
-                    'timestamp': timestamp
+                    'timestamp': str(timestamp)
                 }
                 for trigger, memories in memory_triggers.items()
             ]
 
+            # Format metadata for ChromaDB - ensure all values are proper types
             main_metadata = {
-                'timestamp': timestamp,
+                'timestamp': str(timestamp),
                 'task_type': 'memory_recall',
                 'anchor_patterns': json.dumps(anchor_patterns),
                 'average_effectiveness': float(sum(effectiveness_ratings.values()) / max(len(effectiveness_ratings), 1)),
-                'memory_chain': json.dumps(memory_chain)
+                'memory_chain': json.dumps(memory_chain_data)
             }
 
             # Generate unique ID for ChromaDB
@@ -177,6 +178,7 @@ class EnhancedMemoryManager:
             for anchor_type, patterns in anchor_patterns.items():
                 effective_patterns = [p for p in patterns if p['effectiveness'] >= 4]
                 if effective_patterns:
+                    # Prepare metadata with proper types
                     pattern_metadata = {
                         'anchor_type': str(anchor_type),
                         'timestamp': str(timestamp),
@@ -187,6 +189,7 @@ class EnhancedMemoryManager:
                         )
                     }
                     
+                    # Prepare pattern information as JSON string
                     pattern_info = [
                         {
                             'prompt_template': str(p['prompt']),
@@ -198,6 +201,7 @@ class EnhancedMemoryManager:
 
                     collection_id = f"pattern_{anchor_type}_{int(datetime.now().timestamp())}"
                     
+                    # Store as JSON string in ChromaDB
                     self.pattern_collection.add(
                         documents=[json.dumps(pattern_info)],
                         metadatas=[pattern_metadata],
@@ -212,7 +216,7 @@ class EnhancedMemoryManager:
         try:
             similar_results = self.memory_collection.query(
                 query_texts=[str(task)],
-                n_results=min(limit, 10)  # Ensure we don't exceed collection size
+                n_results=min(limit, 10)
             )
 
             pattern_results = self.pattern_collection.query(
@@ -281,13 +285,16 @@ class EnhancedMemoryManager:
             if results and 'documents' in results and 'metadatas' in results:
                 for idx, (doc, metadata) in enumerate(zip(results['documents'][0], results['metadatas'][0])):
                     if metadata:
-                        session_data = {
-                            'task': str(doc),
-                            'timestamp': str(metadata.get('timestamp', '')),
-                            'effectiveness': float(metadata.get('average_effectiveness', 0)),
-                            'patterns': json.loads(metadata.get('anchor_patterns', '{}'))
-                        }
-                        sessions.append(session_data)
+                        try:
+                            session_data = {
+                                'task': str(doc),
+                                'timestamp': str(metadata.get('timestamp', '')),
+                                'effectiveness': float(metadata.get('average_effectiveness', 0)),
+                                'patterns': json.loads(metadata.get('anchor_patterns', '{}'))
+                            }
+                            sessions.append(session_data)
+                        except json.JSONDecodeError:
+                            continue
             return sessions
         except Exception as e:
             print(f"Error processing similar sessions: {str(e)}")
@@ -333,7 +340,7 @@ class EnhancedMemoryManager:
                         key=lambda x: float(x.get('effectiveness', 0)),
                         reverse=True
                     )[:2]
-                    sequence.extend([str(p['prompt_template']) for p in best_patterns])
+                    sequence.extend([str(p.get('prompt_template', '')) for p in best_patterns])
             
             return sequence
         except Exception as e:
