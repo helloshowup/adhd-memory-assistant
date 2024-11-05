@@ -23,7 +23,7 @@ class PromptMemory:
         vectorizer = TfidfVectorizer(stop_words='english')
         try:
             tfidf_matrix = vectorizer.fit_transform([text1, text2])
-            return cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+            return float(cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0])
         except:
             return 0.0
 
@@ -35,10 +35,10 @@ class PromptMemory:
             similarity = self.calculate_similarity(current_task, hist_task['task'])
             if similarity >= self.similarity_threshold:
                 similar_tasks.append({
-                    'task': hist_task['task'],
-                    'similarity': similarity,
+                    'task': str(hist_task['task']),
+                    'similarity': float(similarity),
                     'prompts': hist_task['prompts'],
-                    'effectiveness': hist_task['effectiveness']
+                    'effectiveness': float(hist_task.get('effectiveness', 0))
                 })
         
         return sorted(similar_tasks, key=lambda x: x['similarity'], reverse=True)
@@ -53,11 +53,11 @@ class PromptMemory:
         }
         
         for task in task_history:
-            for prompt_data in task['prompts']:
-                if prompt_data['effectiveness'] >= self.success_threshold:
+            for prompt_data in task.get('prompts', []):
+                if float(prompt_data.get('effectiveness', 0)) >= self.success_threshold:
                     for anchor_type in successful_patterns.keys():
-                        if anchor_type in prompt_data['type']:
-                            successful_patterns[anchor_type].append(prompt_data['prompt'])
+                        if anchor_type in str(prompt_data.get('type', '')):
+                            successful_patterns[anchor_type].append(str(prompt_data['prompt']))
         
         # Remove duplicates while preserving order
         for anchor_type in successful_patterns:
@@ -70,213 +70,272 @@ class EnhancedMemoryManager:
     
     def __init__(self):
         """Initialize enhanced memory manager with ChromaDB"""
-        self.client = chromadb.Client()
-        self.prompt_memory = PromptMemory()
-        
-        # Initialize collections with get_or_create pattern
         try:
-            self.memory_collection = self.client.get_collection(
-                name="memory_patterns"
-            )
-        except ValueError:  # Collection doesn't exist
-            self.memory_collection = self.client.create_collection(
-                name="memory_patterns",
-                metadata={"hnsw:space": "cosine"}
-            )
-        
-        try:
-            self.pattern_collection = self.client.get_collection(
-                name="trigger_patterns"
-            )
-        except ValueError:  # Collection doesn't exist
-            self.pattern_collection = self.client.create_collection(
-                name="trigger_patterns",
-                metadata={"hnsw:space": "cosine"}
-            )
+            self.client = chromadb.Client()
+            self.prompt_memory = PromptMemory()
+            
+            # Initialize collections with get_or_create pattern
+            try:
+                self.memory_collection = self.client.get_collection(
+                    name="memory_patterns"
+                )
+            except ValueError:  # Collection doesn't exist
+                self.memory_collection = self.client.create_collection(
+                    name="memory_patterns",
+                    metadata={"hnsw:space": "cosine"}
+                )
+            
+            try:
+                self.pattern_collection = self.client.get_collection(
+                    name="trigger_patterns"
+                )
+            except ValueError:  # Collection doesn't exist
+                self.pattern_collection = self.client.create_collection(
+                    name="trigger_patterns",
+                    metadata={"hnsw:space": "cosine"}
+                )
+        except Exception as e:
+            print(f"Error initializing ChromaDB: {str(e)}")
+            raise
 
     def store_memory_pattern(self, task: str,
                            prompt_responses: List[Dict],
                            effectiveness_ratings: Dict[str, int],
                            memory_triggers: Dict[str, List[str]]) -> None:
         """Store memory patterns with enhanced context and trigger tracking"""
-        timestamp = datetime.now().isoformat()
-        
-        # Group responses by memory anchor type
-        anchor_patterns = {
-            "location": [],
-            "time": [],
-            "activity": [],
-            "sensory": []
-        }
-        
-        for pr in prompt_responses:
-            anchor_type = pr.get('type', 'other')
-            if anchor_type in anchor_patterns:
-                anchor_patterns[anchor_type].append({
-                    'prompt': pr['prompt'],
-                    'response': pr['response'],
-                    'effectiveness': effectiveness_ratings.get(pr['prompt'], 0),
-                    'triggered_memories': memory_triggers.get(pr['prompt'], [])
+        try:
+            timestamp = datetime.now().isoformat()
+            
+            # Ensure all values are of correct type for ChromaDB
+            processed_responses = []
+            for pr in prompt_responses:
+                processed_responses.append({
+                    'prompt': str(pr['prompt']),
+                    'response': str(pr['response']),
+                    'type': str(pr.get('type', 'other')),
+                    'effectiveness': int(effectiveness_ratings.get(pr['prompt'], 0))
                 })
 
-        # Store main memory entry
-        main_metadata = {
-            'timestamp': timestamp,
-            'task_type': 'memory_recall',
-            'anchor_patterns': json.dumps(anchor_patterns),
-            'average_effectiveness': sum(effectiveness_ratings.values()) / len(effectiveness_ratings),
-            'memory_chain': self._extract_memory_chain(memory_triggers)
-        }
+            # Group responses by memory anchor type
+            anchor_patterns = {
+                "location": [],
+                "time": [],
+                "activity": [],
+                "sensory": []
+            }
+            
+            for pr in processed_responses:
+                anchor_type = pr['type']
+                if anchor_type in anchor_patterns:
+                    pattern_data = {
+                        'prompt': pr['prompt'],
+                        'response': pr['response'],
+                        'effectiveness': pr['effectiveness'],
+                        'triggered_memories': [str(mem) for mem in memory_triggers.get(pr['prompt'], [])]
+                    }
+                    anchor_patterns[anchor_type].append(pattern_data)
 
-        self.memory_collection.add(
-            documents=[task],
-            metadatas=[main_metadata],
-            ids=[f"memory_{timestamp}"]
-        )
+            # Format metadata for ChromaDB
+            memory_chain = [
+                {
+                    'trigger': str(trigger),
+                    'activated_memories': [str(mem) for mem in memories],
+                    'timestamp': timestamp
+                }
+                for trigger, memories in memory_triggers.items()
+            ]
 
-        # Store pattern information
-        self._store_pattern_information(anchor_patterns, timestamp, task)
+            main_metadata = {
+                'timestamp': timestamp,
+                'task_type': 'memory_recall',
+                'anchor_patterns': json.dumps(anchor_patterns),
+                'average_effectiveness': float(sum(effectiveness_ratings.values()) / max(len(effectiveness_ratings), 1)),
+                'memory_chain': json.dumps(memory_chain)
+            }
 
-    def retrieve_memory_patterns(self, task: str, limit: int = 5) -> Dict:
-        """Retrieve relevant memory patterns and their effectiveness"""
-        similar_results = self.memory_collection.query(
-            query_texts=[task],
-            n_results=limit
-        )
+            # Generate unique ID for ChromaDB
+            collection_id = f"memory_{int(datetime.now().timestamp())}"
 
-        pattern_results = self.pattern_collection.query(
-            query_texts=[task],
-            n_results=limit
-        )
+            # Store in ChromaDB
+            self.memory_collection.add(
+                documents=[str(task)],
+                metadatas=[main_metadata],
+                ids=[collection_id]
+            )
 
-        successful_patterns = self._analyze_pattern_effectiveness(
-            similar_results, pattern_results
-        )
-
-        return {
-            'similar_sessions': self._process_similar_sessions(similar_results),
-            'effective_patterns': successful_patterns,
-            'suggested_sequence': self._generate_prompt_sequence(successful_patterns)
-        }
+            # Store pattern information
+            self._store_pattern_information(anchor_patterns, timestamp, task)
+            
+        except Exception as e:
+            print(f"Error storing memory pattern: {str(e)}")
+            raise
 
     def _store_pattern_information(self, anchor_patterns: Dict, 
                                  timestamp: str, task: str) -> None:
         """Store pattern information for effective memory triggers"""
-        for anchor_type, patterns in anchor_patterns.items():
-            effective_patterns = [p for p in patterns if p['effectiveness'] >= 4]
-            if effective_patterns:
-                pattern_metadata = {
-                    'anchor_type': anchor_type,
-                    'timestamp': timestamp,
-                    'original_task': task,
-                    'trigger_count': len(effective_patterns),
-                    'average_effectiveness': sum(p['effectiveness'] for p in effective_patterns) / len(effective_patterns)
-                }
-                
-                pattern_text = json.dumps([{
-                    'prompt_template': p['prompt'],
-                    'trigger_type': self._analyze_trigger_type(p['response']),
-                    'memory_connections': len(p['triggered_memories'])
-                } for p in effective_patterns])
+        try:
+            for anchor_type, patterns in anchor_patterns.items():
+                effective_patterns = [p for p in patterns if p['effectiveness'] >= 4]
+                if effective_patterns:
+                    pattern_metadata = {
+                        'anchor_type': str(anchor_type),
+                        'timestamp': str(timestamp),
+                        'original_task': str(task),
+                        'trigger_count': int(len(effective_patterns)),
+                        'average_effectiveness': float(
+                            sum(p['effectiveness'] for p in effective_patterns) / len(effective_patterns)
+                        )
+                    }
+                    
+                    pattern_info = [
+                        {
+                            'prompt_template': str(p['prompt']),
+                            'trigger_type': str(self._analyze_trigger_type(p['response'])),
+                            'memory_connections': int(len(p.get('triggered_memories', [])))
+                        } 
+                        for p in effective_patterns
+                    ]
 
-                self.pattern_collection.add(
-                    documents=[pattern_text],
-                    metadatas=[pattern_metadata],
-                    ids=[f"pattern_{anchor_type}_{timestamp}"]
-                )
+                    collection_id = f"pattern_{anchor_type}_{int(datetime.now().timestamp())}"
+                    
+                    self.pattern_collection.add(
+                        documents=[json.dumps(pattern_info)],
+                        metadatas=[pattern_metadata],
+                        ids=[collection_id]
+                    )
+        except Exception as e:
+            print(f"Error storing pattern information: {str(e)}")
+            raise
 
-    def _extract_memory_chain(self, memory_triggers: Dict[str, List[str]]) -> List[Dict]:
-        """Extract the chain of memory activations"""
-        chain = []
-        for prompt, triggered_memories in memory_triggers.items():
-            chain.append({
-                'trigger': prompt,
-                'activated_memories': triggered_memories,
-                'timestamp': datetime.now().isoformat()
-            })
-        return chain
+    def retrieve_memory_patterns(self, task: str, limit: int = 5) -> Dict:
+        """Retrieve relevant memory patterns and their effectiveness"""
+        try:
+            similar_results = self.memory_collection.query(
+                query_texts=[str(task)],
+                n_results=min(limit, 10)  # Ensure we don't exceed collection size
+            )
 
-    def _analyze_trigger_type(self, response: str) -> str:
-        """Analyze the type of memory trigger from the response"""
-        trigger_keywords = {
-            'visual': ['saw', 'looked', 'screen', 'color', 'ide', 'editor'],
-            'spatial': ['where', 'place', 'room', 'desk', 'office'],
-            'temporal': ['when', 'time', 'before', 'after', 'during'],
-            'procedural': ['did', 'made', 'created', 'built', 'wrote'],
-            'emotional': ['felt', 'frustrated', 'excited', 'worried']
-        }
-        
-        response_lower = response.lower()
-        trigger_counts = {
-            t_type: sum(1 for word in keywords if word in response_lower)
-            for t_type, keywords in trigger_keywords.items()
-        }
-        
-        return max(trigger_counts.items(), key=lambda x: x[1])[0]
+            pattern_results = self.pattern_collection.query(
+                query_texts=[str(task)],
+                n_results=min(limit, 10)
+            )
 
-    def _process_similar_sessions(self, results: Dict) -> List[Dict]:
-        """Process and format similar session results"""
-        sessions = []
-        for idx, (doc, metadata) in enumerate(zip(results['documents'][0], results['metadatas'][0])):
-            if metadata:
-                sessions.append({
-                    'task': doc,
-                    'timestamp': metadata.get('timestamp'),
-                    'effectiveness': metadata.get('average_effectiveness', 0),
-                    'patterns': json.loads(metadata.get('anchor_patterns', '{}'))
-                })
-        return sessions
+            successful_patterns = self._analyze_pattern_effectiveness(
+                similar_results, pattern_results
+            )
+
+            return {
+                'similar_sessions': self._process_similar_sessions(similar_results),
+                'effective_patterns': successful_patterns,
+                'suggested_sequence': self._generate_prompt_sequence(successful_patterns)
+            }
+        except Exception as e:
+            print(f"Error retrieving memory patterns: {str(e)}")
+            return {
+                'similar_sessions': [],
+                'effective_patterns': {},
+                'suggested_sequence': []
+            }
 
     def _analyze_pattern_effectiveness(self, similar_results: Dict, pattern_results: Dict) -> Dict:
         """Analyze effectiveness of memory patterns"""
-        effectiveness_data = {}
-        
-        # Process similar results
-        for idx, metadata in enumerate(similar_results['metadatas'][0]):
-            if metadata:
-                patterns = json.loads(metadata.get('anchor_patterns', '{}'))
-                for anchor_type, type_patterns in patterns.items():
-                    if anchor_type not in effectiveness_data:
-                        effectiveness_data[anchor_type] = {
-                            'total_effectiveness': 0,
-                            'count': 0,
-                            'patterns': []
+        try:
+            effectiveness_data = {}
+            
+            # Process similar results
+            for idx, metadata in enumerate(similar_results['metadatas'][0]):
+                if metadata:
+                    patterns = json.loads(metadata.get('anchor_patterns', '{}'))
+                    for anchor_type, type_patterns in patterns.items():
+                        if anchor_type not in effectiveness_data:
+                            effectiveness_data[anchor_type] = {
+                                'total_effectiveness': 0.0,
+                                'count': 0,
+                                'patterns': []
+                            }
+                        
+                        for pattern in type_patterns:
+                            if float(pattern['effectiveness']) >= 4:
+                                effectiveness_data[anchor_type]['patterns'].append(pattern)
+                                effectiveness_data[anchor_type]['total_effectiveness'] += float(pattern['effectiveness'])
+                                effectiveness_data[anchor_type]['count'] += 1
+            
+            # Calculate averages and format output
+            pattern_effectiveness = {}
+            for anchor_type, data in effectiveness_data.items():
+                if data['count'] > 0:
+                    pattern_effectiveness[anchor_type] = {
+                        'average_effectiveness': float(data['total_effectiveness'] / data['count']),
+                        'patterns': data['patterns']
+                    }
+            
+            return pattern_effectiveness
+        except Exception as e:
+            print(f"Error analyzing pattern effectiveness: {str(e)}")
+            return {}
+
+    def _process_similar_sessions(self, results: Dict) -> List[Dict]:
+        """Process and format similar session results"""
+        try:
+            sessions = []
+            if results and 'documents' in results and 'metadatas' in results:
+                for idx, (doc, metadata) in enumerate(zip(results['documents'][0], results['metadatas'][0])):
+                    if metadata:
+                        session_data = {
+                            'task': str(doc),
+                            'timestamp': str(metadata.get('timestamp', '')),
+                            'effectiveness': float(metadata.get('average_effectiveness', 0)),
+                            'patterns': json.loads(metadata.get('anchor_patterns', '{}'))
                         }
-                    
-                    for pattern in type_patterns:
-                        if pattern['effectiveness'] >= 4:
-                            effectiveness_data[anchor_type]['patterns'].append(pattern)
-                            effectiveness_data[anchor_type]['total_effectiveness'] += pattern['effectiveness']
-                            effectiveness_data[anchor_type]['count'] += 1
-        
-        # Calculate averages and format output
-        pattern_effectiveness = {}
-        for anchor_type, data in effectiveness_data.items():
-            if data['count'] > 0:
-                pattern_effectiveness[anchor_type] = {
-                    'average_effectiveness': data['total_effectiveness'] / data['count'],
-                    'patterns': data['patterns']
-                }
-        
-        return pattern_effectiveness
+                        sessions.append(session_data)
+            return sessions
+        except Exception as e:
+            print(f"Error processing similar sessions: {str(e)}")
+            return []
+
+    def _analyze_trigger_type(self, response: str) -> str:
+        """Analyze the type of memory trigger from the response"""
+        try:
+            trigger_keywords = {
+                'visual': ['saw', 'looked', 'screen', 'color', 'ide', 'editor'],
+                'spatial': ['where', 'place', 'room', 'desk', 'office'],
+                'temporal': ['when', 'time', 'before', 'after', 'during'],
+                'procedural': ['did', 'made', 'created', 'built', 'wrote'],
+                'emotional': ['felt', 'frustrated', 'excited', 'worried']
+            }
+            
+            response_lower = str(response).lower()
+            trigger_counts = {
+                t_type: sum(1 for word in keywords if word in response_lower)
+                for t_type, keywords in trigger_keywords.items()
+            }
+            
+            return max(trigger_counts.items(), key=lambda x: x[1])[0]
+        except Exception as e:
+            print(f"Error analyzing trigger type: {str(e)}")
+            return 'other'
 
     def _generate_prompt_sequence(self, pattern_effectiveness: Dict) -> List[str]:
         """Generate optimal prompt sequence based on pattern effectiveness"""
-        sequence = []
-        sorted_types = sorted(
-            pattern_effectiveness.items(),
-            key=lambda x: x[1]['average_effectiveness'],
-            reverse=True
-        )
-        
-        for anchor_type, data in sorted_types:
-            patterns = data['patterns']
-            if patterns:
-                best_patterns = sorted(
-                    patterns,
-                    key=lambda x: x.get('effectiveness', 0),
-                    reverse=True
-                )[:2]
-                sequence.extend([p['prompt_template'] for p in best_patterns])
-        
-        return sequence
+        try:
+            sequence = []
+            sorted_types = sorted(
+                pattern_effectiveness.items(),
+                key=lambda x: float(x[1]['average_effectiveness']),
+                reverse=True
+            )
+            
+            for anchor_type, data in sorted_types:
+                patterns = data['patterns']
+                if patterns:
+                    best_patterns = sorted(
+                        patterns,
+                        key=lambda x: float(x.get('effectiveness', 0)),
+                        reverse=True
+                    )[:2]
+                    sequence.extend([str(p['prompt_template']) for p in best_patterns])
+            
+            return sequence
+        except Exception as e:
+            print(f"Error generating prompt sequence: {str(e)}")
+            return []
