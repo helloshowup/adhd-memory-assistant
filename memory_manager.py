@@ -73,16 +73,26 @@ class EnhancedMemoryManager:
         self.client = chromadb.Client()
         self.prompt_memory = PromptMemory()
         
-        # Initialize collections
-        self.memory_collection = self.client.create_collection(
-            name="memory_patterns",
-            metadata={"hnsw:space": "cosine"}
-        )
+        # Initialize collections with get_or_create pattern
+        try:
+            self.memory_collection = self.client.get_collection(
+                name="memory_patterns"
+            )
+        except ValueError:  # Collection doesn't exist
+            self.memory_collection = self.client.create_collection(
+                name="memory_patterns",
+                metadata={"hnsw:space": "cosine"}
+            )
         
-        self.pattern_collection = self.client.create_collection(
-            name="trigger_patterns",
-            metadata={"hnsw:space": "cosine"}
-        )
+        try:
+            self.pattern_collection = self.client.get_collection(
+                name="trigger_patterns"
+            )
+        except ValueError:  # Collection doesn't exist
+            self.pattern_collection = self.client.create_collection(
+                name="trigger_patterns",
+                metadata={"hnsw:space": "cosine"}
+            )
 
     def store_memory_pattern(self, task: str,
                            prompt_responses: List[Dict],
@@ -207,7 +217,7 @@ class EnhancedMemoryManager:
     def _process_similar_sessions(self, results: Dict) -> List[Dict]:
         """Process and format similar session results"""
         sessions = []
-        for idx, (doc, metadata) in enumerate(zip(results['documents'], results['metadatas'])):
+        for idx, (doc, metadata) in enumerate(zip(results['documents'][0], results['metadatas'][0])):
             if metadata:
                 sessions.append({
                     'task': doc,
@@ -216,6 +226,39 @@ class EnhancedMemoryManager:
                     'patterns': json.loads(metadata.get('anchor_patterns', '{}'))
                 })
         return sessions
+
+    def _analyze_pattern_effectiveness(self, similar_results: Dict, pattern_results: Dict) -> Dict:
+        """Analyze effectiveness of memory patterns"""
+        effectiveness_data = {}
+        
+        # Process similar results
+        for idx, metadata in enumerate(similar_results['metadatas'][0]):
+            if metadata:
+                patterns = json.loads(metadata.get('anchor_patterns', '{}'))
+                for anchor_type, type_patterns in patterns.items():
+                    if anchor_type not in effectiveness_data:
+                        effectiveness_data[anchor_type] = {
+                            'total_effectiveness': 0,
+                            'count': 0,
+                            'patterns': []
+                        }
+                    
+                    for pattern in type_patterns:
+                        if pattern['effectiveness'] >= 4:
+                            effectiveness_data[anchor_type]['patterns'].append(pattern)
+                            effectiveness_data[anchor_type]['total_effectiveness'] += pattern['effectiveness']
+                            effectiveness_data[anchor_type]['count'] += 1
+        
+        # Calculate averages and format output
+        pattern_effectiveness = {}
+        for anchor_type, data in effectiveness_data.items():
+            if data['count'] > 0:
+                pattern_effectiveness[anchor_type] = {
+                    'average_effectiveness': data['total_effectiveness'] / data['count'],
+                    'patterns': data['patterns']
+                }
+        
+        return pattern_effectiveness
 
     def _generate_prompt_sequence(self, pattern_effectiveness: Dict) -> List[str]:
         """Generate optimal prompt sequence based on pattern effectiveness"""
