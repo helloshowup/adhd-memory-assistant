@@ -24,7 +24,6 @@ python-dateutil==2.8.2
 pytz==2023.6
 pytz-deprecation-shim==0.1.0.post0
 requests==2.31.0
-rich==14.4.2
 semver==3.0.0
 six==1.19.0
 smmap==5.0.0
