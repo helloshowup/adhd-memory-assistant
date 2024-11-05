@@ -100,6 +100,28 @@ class PromptEngine:
         self.template_manager = PromptTemplate()
         self.current_memory_triggers = {}
 
+    def get_context_for_task(self, task: str) -> Dict:
+        """Get memory context for a given task"""
+        try:
+            # Get memory patterns from the memory manager
+            memory_patterns = self.memory_manager.retrieve_memory_patterns(task)
+            
+            # Format the context
+            context = {
+                'similar_tasks': memory_patterns.get('similar_sessions', []),
+                'effective_patterns': memory_patterns.get('effective_patterns', {}),
+                'suggested_sequence': memory_patterns.get('suggested_sequence', [])
+            }
+            
+            return context
+        except Exception as e:
+            print(f"Error getting context: {str(e)}")
+            return {
+                'similar_tasks': [],
+                'effective_patterns': {},
+                'suggested_sequence': []
+            }
+
     async def generate_prompts(self, task: str, context: Dict = None) -> Tuple[List[str], Dict[str, str]]:
         """Generate prompts using memory patterns and error recovery"""
         try:
