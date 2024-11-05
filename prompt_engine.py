@@ -5,8 +5,8 @@ from typing import Dict, List, Tuple
 import json
 from datetime import datetime
 import anthropic
-from .memory_manager import EnhancedMemoryManager
-from .utils import extract_memory_triggers
+from memory_manager import EnhancedMemoryManager
+from utils import extract_memory_triggers
 
 class PromptTemplate:
     """ADHD-specific prompt template manager"""
