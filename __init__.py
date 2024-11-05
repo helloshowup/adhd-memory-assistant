@@ -1,1 +1,1 @@
-ÿþ
+# Python package initialization file
