@@ -20,6 +20,7 @@ print("="*50)
 # Original imports
 import streamlit as st
 import anthropic
+import asyncio
 from datetime import datetime
 from typing import Dict
 from dotenv import load_dotenv
@@ -40,6 +41,10 @@ load_dotenv()
 
 # Initialize Anthropic client
 client = anthropic.Client(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+async def generate_prompts_async(engine, task, context):
+    """Async wrapper for prompt generation"""
+    return await engine.generate_prompts(task, context)
 
 def main():
     st.title("ADHD Memory Assistant")
@@ -71,9 +76,17 @@ def main():
                     st.session_state.context = st.session_state.engine.get_context_for_task(task)
                     st.session_state.similar_tasks = st.session_state.context.get('similar_tasks', [])
                     
-                    prompts, prompt_types = run_async(
-                        st.session_state.engine.generate_prompts(task, st.session_state.context)
+                    # Create event loop and run async function
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    prompts, prompt_types = loop.run_until_complete(
+                        generate_prompts_async(
+                            st.session_state.engine,
+                            task,
+                            st.session_state.context
+                        )
                     )
+                    loop.close()
                     
                     # Update session state
                     st.session_state.current_task = task
