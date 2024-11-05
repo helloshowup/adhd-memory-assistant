@@ -1,14 +1,38 @@
 """
 Main Streamlit application for ADHD Memory Assistant
 """
+# Debug section
+import os
+import sys
+print("="*50)
+print("DEBUG: Current directory:", os.getcwd())
+print("DEBUG: Files in directory:", os.listdir())
+print("DEBUG: Python path:", sys.path)
+print("="*50)
+
+# Add the directory containing the app to Python path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+    print(f"DEBUG: Added {current_dir} to Python path")
+print("="*50)
+
+# Original imports
 import streamlit as st
 import anthropic
 from datetime import datetime
 from typing import Dict
-import os
 from dotenv import load_dotenv
 
-from prompt_engine import PromptEngine
+# Try importing with debug info
+try:
+    from prompt_engine import PromptEngine
+    print("DEBUG: Successfully imported PromptEngine")
+except ImportError as e:
+    print(f"DEBUG: Import error details: {str(e)}")
+    print(f"DEBUG: Looking for module in these locations: {sys.path}")
+    raise
+
 from utils import initialize_session_state, run_async, calculate_average_rating
 
 # Load environment variables
