@@ -4,6 +4,9 @@ Memory management and pattern tracking for ADHD Memory Assistant
 from typing import Dict, List, Tuple
 import json
 from datetime import datetime
+import sys
+import pysqlite3
+sys.modules['sqlite3'] = pysqlite3
 import chromadb
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
